@@ -1,16 +1,15 @@
 #! /usr/bin/env node
 
 import archiver from "archiver";
-import axios from "axios";
+import axios, { AxiosInstance } from "axios";
 import { program } from "commander";
 import fs from "fs";
 import path, { basename } from "path";
-import semver from "semver";
 import FormData from "form-data";
 import { performance } from "perf_hooks";
 import prompt from "prompt";
 import setCookie from "set-cookie-parser";
-import os from "os";
+import os, { homedir, platform } from "os";
 import url from "url";
 import ProtocolRegistry from "protocol-registry";
 const stringIsAValidUrl = (s: string) => {
@@ -55,14 +54,6 @@ program
     const manifest = JSON.parse(
       fs.readFileSync(path.join(dir, "/manifest.json"), "utf-8")
     );
-    if (!semver.valid(manifest.version)) {
-      console.log(
-        "ERR: version " +
-          manifest.version +
-          " is not valid semver (https://semver.org/)"
-      );
-      process.exit(1);
-    }
     const archive = archiver("zip", {
       zlib: { level: 9 }, // Sets the compression level.
     });
@@ -219,14 +210,7 @@ async function pkg(folder) {
   const manifest = JSON.parse(
     fs.readFileSync(path.join(folder, "/manifest.json"), "utf-8")
   );
-  if (!semver.valid(manifest.version)) {
-    console.log(
-      "ERR: version " +
-        manifest.version +
-        " is not valid semver (https://semver.org/)"
-    );
-    process.exit(1);
-  }
+
   const archive = archiver("zip", {
     zlib: { level: 9 }, // Sets the compression level.
   });
@@ -271,14 +255,7 @@ function createMod(dir, options) {
   const manifest = JSON.parse(
     fs.readFileSync(path.join(dir, "/manifest.json"), "utf-8")
   );
-  if (!semver.valid(manifest.version)) {
-    console.log(
-      "ERR: version " +
-        manifest.version +
-        " is not valid semver (https://semver.org/)"
-    );
-    process.exit(1);
-  }
+
   const exists = fs.existsSync(path.join(dir, "README.md"));
   const readme = exists
     ? fs.readFileSync(path.join(dir, "README.md"), "utf-8")
@@ -376,5 +353,104 @@ function uploadMod(zip, options) {
     });
 }
 if (stringIsAValidUrl(process.argv[2])) {
-  console.log(process.argv[2]);
+  (async () => {
+    const regex = /^modpkg:\/\/([a-zA-Z0-9\-]*)\/([A-Za-z0-9_-]*)/gs;
+
+    const url = process.argv[2];
+    let m: RegExpExecArray = regex.exec(url);
+    const instance = axios.create({
+      baseURL: "https://modsfolder.com",
+      withCredentials: true,
+    });
+    const version = (await instance.get("/api/versions/" + m[2]))
+      .data as Version;
+    const dependencies = version.dependencies.split(",");
+    const installs = [installMod(instance, m[1], version)];
+
+    await Promise.all(
+      dependencies.map(async (dep) => {
+        const m = /^([a-zA-Z][a-zA-Z0-9\-]*)\:([0-9\+\.]*)$/gs.exec(dep);
+        const mod = (await instance.get("/api/mods/" + m[1])).data as {
+          id: string;
+          slug: string;
+        };
+
+        const versions = (
+          await instance.get("/api/versions", { params: { mod_id: mod.id } })
+        ).data as Version[];
+        const dep_version = versions.find((v) => {
+          return (
+            v.version_number === m[2] && v.mod_loader === version.mod_loader
+          );
+        });
+
+        installs.push(installMod(instance, m[1], dep_version));
+      })
+    );
+    await Promise.all(installs);
+
+    console.log("Installed mod and dependencies! You can close this window.");
+  })();
 } else program.parse();
+async function installMod(
+  instance: AxiosInstance,
+  mod_slug: string,
+  version: Version
+) {
+  if (
+    fs.existsSync(
+      path.join(
+        getModsDir(),
+        mod_slug +
+          "-" +
+          version.version_number +
+          "-" +
+          version.mod_loader +
+          ".jar"
+      )
+    )
+  ) {
+    console.log(
+      "already installed mod",
+      mod_slug + ":" + version.version_number
+    );
+    return;
+  }
+  console.log("installing", mod_slug + ":" + version.version_number);
+  const res = await instance.get(version.download_url, {
+    responseType: "stream",
+  });
+
+  res.data.pipe(
+    fs.createWriteStream(
+      path.join(
+        getModsDir(),
+        mod_slug +
+          "-" +
+          version.version_number +
+          "-" +
+          version.mod_loader +
+          ".jar"
+      )
+    )
+  );
+}
+function getModsDir() {
+  if (platform() === "win32") {
+    return homedir() + "/AppData/Roaming/.minecraft/mods/";
+  } else if (platform() == "darwin") {
+    return homedir() + "/Library/Application Support/minecraft/mods";
+  } else if (platform() == "linux") {
+    return homedir() + "/.minecraft/mods";
+  }
+}
+interface Version {
+  id: string;
+  version_number: string;
+  filesize: number;
+  download_url: string;
+  mod_id: string;
+  game_version: string;
+  mod_loader: string;
+  dependencies: string;
+}
