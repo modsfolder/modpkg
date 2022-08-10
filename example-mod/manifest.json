@@ -1,0 +1,10 @@
+{
+	"author": "eli",
+	"dependencies": {},
+	"description": "An example mod for testing.",
+	"game_version": "1.0.0",
+	"game": "mc",
+	"name": "example-mod",
+	"title": "Example Mod",
+	"version": "1.1.0"
+}
