@@ -11,6 +11,20 @@ import { performance } from "perf_hooks";
 import prompt from "prompt";
 import setCookie from "set-cookie-parser";
 import os from "os";
+import url from "url";
+import ProtocolRegistry from "protocol-registry";
+const stringIsAValidUrl = (s: string) => {
+  try {
+    new url.URL(s);
+    return true;
+  } catch (err) {
+    return false;
+  }
+};
+
+console.log(
+  "modpkg is under the MIT license. Contribute on Github at https://github.com/modsfolder/modpkg"
+);
 program.name("modpkg");
 
 let auth_token = "";
@@ -20,6 +34,20 @@ if (fs.existsSync(path.join(path.join(os.homedir(), ".modpkg_token")))) {
     "utf-8"
   );
 }
+program
+  .command("register")
+  .description("adds the modpkg:// protocol to registry")
+  .action(() => {
+    ProtocolRegistry.register({
+      protocol: "modpkg",
+      command: `node ${path.join(__dirname, "./index.js")} $_URL_`,
+      override: true,
+      terminal: true,
+      script: false,
+    }).then(async () => {
+      console.log("Successfully registered");
+    });
+  });
 program
   .command("pkg <directory>")
   .description("zips up a directory to make it ready for packaging")
@@ -84,13 +112,18 @@ program
     "use a custom registry",
     "https://www.elidavies.com"
   )
-  .action((dir, options) => {
+  .action(async (dir, options) => {
     if (auth_token !== "") {
-      createMod(dir, options);
-      return;
+      const res = await axios.get(options.registry + "/api/whoami", {
+        headers: { Cookie: "token=" + auth_token },
+      });
+      if (res.data !== null) {
+        createMod(dir, options);
+        return;
+      }
     }
 
-    prompt.get(["username", { name: "password", hidden: true }]).then((res) => {
+    prompt.get(["username", "password"]).then((res) => {
       const instance = axios.create({
         baseURL: options.registry,
         withCredentials: true,
@@ -143,10 +176,17 @@ program
       zip = await pkg(archive);
     }
     if (auth_token !== "") {
-      uploadMod(zip, options);
-      return;
+      if (auth_token !== "") {
+        const res = await axios.get(options.registry + "/api/whoami", {
+          headers: { Cookie: "token=" + auth_token },
+        });
+        if (res.data !== null) {
+          uploadMod(zip, options);
+          return;
+        }
+      }
     }
-    prompt.get(["username", { name: "password", hidden: true }]).then((res) => {
+    prompt.get(["username", "password"]).then((res) => {
       instance
         .post(
           "/api/signin",
@@ -335,4 +375,6 @@ function uploadMod(zip, options) {
       }
     });
 }
-program.parse();
+if (stringIsAValidUrl(process.argv[2])) {
+  console.log(process.argv[2]);
+} else program.parse();
